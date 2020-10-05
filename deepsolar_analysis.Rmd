@@ -1,0 +1,292 @@
+---
+title: "Statistical Machine Learning Project"
+author: "Nikhil BP"
+date: "29/04/2020"
+output: word_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Abstract
+The main task of the project is to predict the target variable in the given data set using supervised classification methods given the set of predictive variables. The complete data analysis is carried out with those supervised methods explained in the course,finally the best model is chosen with highest accuracy.
+
+### Inroduction
+The dataset used here is a subset of the DeepSolar database, a solar installation database for the US, built by extracting information from satellite images, consisting of 20736 obs and 81 variables out of which 18 are non-numeric variables and 62 are numeric.The main aim is to predict the solar power system coverage using solar_system_count(binary variable) as the target variable.
+Supervised classification method is used because it is the process of predicting the target variables using a function of input variables.The six methods used here are svm, logistic regression, boosting, bagging, random forest and classification tree.The complete analysis is performed on the dataset.Finally,Hold out sample method of cross-validation is used to evaluate the relative merits of range of classification methods used.
+
+### Methods
+
+LOADING THE DATA:
+The data is loaded and stored in variable called data.
+
+```{r}
+ds = read.csv("data_project_deepsolar.csv", header = TRUE)
+```
+
+Summary of the target variable: This step helps us to know if the data is evenly distributed. The target variable “solar_system_count” contains 10900 observation under “high” and 9836 records under “low” , hence almost evenly distributed which is good.
+
+```{r}
+table(ds[,1])
+```
+EXPLORATORY DATA ANALYSIS:
+
+This step is a must to have prior knowledge about the data ,its variables. Some of the EDA functions require numeric type variables , therefore we subset a dataframe which contains only numeric columns.
+
+```{r}
+numcols <- ds[, sapply(ds, class) == "numeric"]
+charcols <- ds[, sapply(ds, class) != "numeric"]
+```
+•	Pair plots: Only few variables are visualized as there are too many, from the pair plots below we can infer the association between numeric variables.
+•	The second kind of pair plot is flexible which includes regression lines and box plot, from observing the plot we can infer that there is linear relationship between variables(negative or positive).There are too many outliers for variables race_other_rate, race_two_more rate and so on. The r values gives the correlation, we can see all the variables plotted below are weakly correlated (less than 0.5).
+•	Parallel coordinates plot : This type of representation is useful to explore differences between classes and observations over different dimensions. The second type highlight the parallel coordinates lines of each class by using the colours.
+•	Heatmap is a graphical representation of data where the entries contained in a data matrix are directly represented as colors.  The intensity of the colours is related to the magnitude of the data points. 
+
+```{r}
+# Pairs plot
+class <- ds$solar_system_count
+set <- c(60,9,19,20,22) # select a set of variables for display
+colvec <- c("magenta3", "deepskyblue2")
+cols <- adjustcolor(colvec[class], 0.5) # set class colors
+pairs(ds[,set], gap = 0, pch = 19, col = cols)
+
+```
+
+Type2 :
+
+```{r}
+# set a function for calculating regression line
+panel.line <- function(x, y){
+  fit <- lm(y ~ x)
+  points(x, y, pch = 19, col = cols) 
+  abline(fit, col = 1, lwd = 1.5)
+}
+# set function for correlation
+panel.cor <- function(x, y) {
+  r <- round(cor(x, y), 2)
+  txt <- paste0("r = ", r)
+  loc <- c( mean(range(x)), mean(range(y)) ) 
+  text(loc[1], loc[2], txt, cex = 1.5)
+}
+# set function for boxplot
+panel.box <- function(x, y) {
+  r <- range(x) # to center boxplots r <- r + rev(r*0.5)
+  boxplot(x ~ class, add = TRUE,at = seq(r[1], r[2], length = 2), col = colvec)
+# to place text in the center
+}
+# plot
+
+pairs(numcols[,set], gap = 0, lower.panel = panel.cor,
+upper.panel = panel.line, diag.panel = panel.box)
+```
+
+```{r}
+library(MASS)
+cols <- adjustcolor(colvec[class], 0.5) 
+parcoord(numcols, col = cols, var.label = TRUE)
+```
+
+```{r}
+cols0 <- colvec[class]
+K <- length(colvec) # number of classes
+# plot multiple parallel coordinates
+par(mfrow = c(K, 1), mar = c(3,2,1,0.5))
+for ( k in 1:K ) {
+cols <- cols0
+cols[cols != colvec[k]] <- adjustcolor("gray", 0) 
+parcoord(numcols, col = cols, var.label = TRUE)
+}
+```
+
+```{r}
+library(RColorBrewer)
+library(fields)
+library(caret)
+
+pal <- brewer.pal(11, "BrBG")
+R <- cor(numcols) # compute correlation matrix
+V <- ncol(R)
+# 'blue' denotes negative correlation, 'red' positive correlation
+pal <- rev( brewer.pal(11, "RdBu") )
+# we need to make sure correct ordering
+image.plot(1:V, 1:V, R[,V:1], col = pal, nlevel = 11, zlim = c(-1, 1))
+
+df = cor(numcols)
+hc = findCorrelation(df, cutoff=0.7) # putt any value as a "cutoff" 
+red_data = numcols[,-c(hc)]
+scaled_data <- scale(red_data)
+dataset <- cbind(charcols,scaled_data)
+
+```
+
+APPLYING CLASSIFICATIONS AND EVALUATING THE GENERALIZED PERFORMANCE.
+The central goal is to obtain a machine learning model which will perform well at predicting the target variable on new unseen inputs.To assess the general performance of a model, we aim to estimate its general prediction error, which is denoted as “generalization error”.
+
+Install and load packages multinomial logistic regression, random forest, svm ,classification tree, bagging and boosting.It is good practice to replicate the procedure of training-validation-testing a number of times to account for sampling variation and assess uncertainty,hence here we replicate the process 100 times.Since there are large number of observations , hold out procedure is suitable.Each time in the loop, the data is splitted into train-val-test , fit classifiers to training data, and is predicted on val data, only the best classifier is chosen to perform on new test data.
+The accuracy is recorded in the variable out and the highest accuracy every time is recorded in the variable accBest
+
+```{r}
+
+library(kernlab)#svm
+library(rpart) #classification tree
+library(nnet) #multinomial regression
+library(adabag) #bagging
+library(randomForest) #random forest
+
+# replicate the process a number of times
+R <- 100
+out <- matrix(NA, R, 8)
+colnames(out) <- c( "val_svm", "val_multinom_log", "val_class_tree", "random_forest", "bagging", "boosting","best", "test") 
+out <- as.data.frame(out)
+
+for ( r in 1:R ) {
+  # split the data into training, validation and test sets
+  N <- nrow(dataset)
+  train <- sample(1:N, size = 0.50*N)
+  val <- sample( setdiff(1:N, train), size = 0.25*N ) 
+  test <- setdiff(1:N, union(train, val))
+  
+  # fit classifiers to only the training data
+  fitsvm <- ksvm(solar_system_count ~ ., data = dataset[train,])
+  fitml <- multinom(solar_system_count ~ ., data = dataset, subset = train,maxit=300,trace=FALSE)
+  fitct<- rpart(solar_system_count ~ ., data = dataset, subset = train) 
+  fitrf <- randomForest(solar_system_count ~.,data = dataset[train,]) 
+  fitbg <-bagging(solar_system_count~.,data = dataset[train,])
+  fitbs <- boosting(solar_system_count~.,data = dataset[train,],coeflearn ="Breiman",boos =FALSE)
+# fit on validation data
+  
+  # classification trees
+  predValct <- predict(fitct, type = "class", newdata = dataset[val,]) 
+  tabValct <- table(dataset$solar_system_count[val], predValct)
+  accct <- sum(diag(tabValct))/sum(tabValct)
+#
+
+  # support vector machines
+  predValSvm <- predict(fitsvm, newdata = dataset[val,]) 
+  tabValSvm <- table(dataset$solar_system_count[val], predValSvm) 
+  accsvm <- sum(diag(tabValSvm))/sum(tabValSvm)
+  
+  #multinomial regression
+  predValml <- predict(fitml, type = "class", newdata = dataset[val,])
+  tabValml <- table(dataset$solar_system_count[val], predValml)
+  accml <- sum(diag(tabValml))/sum(tabValml)
+
+  # random forest
+  predValrf <- predict(fitrf, type = "class", newdata = dataset[val,]) 
+  tabValrf <- table(dataset$solar_system_count[val], predValrf)
+  accrf <- sum(diag(tabValrf))/sum(tabValrf)
+  
+  # bagging
+  predValbg <- predict(fitbg, newdata = dataset[val,]) 
+  tabValbg<- predValbg$confusion
+  accbg <- sum(diag(tabValbg))/sum(tabValbg)
+  
+  # boosting
+  predValbs <- predict(fitbs,newdata = dataset[val,]) 
+  tabValbs <- predValbs$confusion
+  accbs <- sum(diag(tabValbs))/sum(tabValbs)
+  
+  # compute accuracy
+  acc <- c(val_svm=accsvm, val_multinom_log=accml,val_class_tree=accct,random_forest=accrf, bagging=accbg,boosting=accbs)
+  out[r,1] <- accsvm
+  out[r,2] <- accml
+  out[r,3] <- accct
+  out[r,4] <- accrf
+  out[r,5] <- accbg
+  out[r,6] <- accbs
+  # use the method that did best on the validation data # to predict the test data
+  best <- names( which.max(acc) )
+  switch(best,
+    val_svm = {
+    predTestsvm <- predict(fitsvm,newdata = dataset[test,]) 
+    tabTestsvm <- table(dataset$solar_system_count[test], predTestsvm)
+    accBest <- sum(diag(tabTestsvm))/sum(tabTestsvm)
+    },
+    val_multinom_log= {
+     predTestml <- predict(fitml, type = "class", newdata = dataset[test,]) 
+     tabTestml<- table(dataset$solar_system_count[test], predTestml)
+     accBest <- sum(diag(tabTestml))/sum(tabTestml)
+    },
+    val_class_tree={
+    predTestrf <- predict(fitrf, type = "class", newdata = dataset[test,]) 
+    tabTestrf <- table(dataset$solar_system_count[test], predTestrf)
+    accBest <- sum(diag(tabTestrf))/sum(tabTestrf)
+    },
+    random_forest ={predtestrf <- predict(fitrf, type = "class", newdata = dataset[test,]) 
+  tabtestrf <- table(dataset$solar_system_count[test], predtestrf)
+  accBest <- sum(diag(tabtestrf))/sum(tabtestrf)},
+    
+    bagging ={ 
+      predtestbg <- predict(fitbg,newdata = dataset[test,]) 
+  tabtestbg<- predtestbg$confusion
+  accBest <- sum(diag(tabtestbg))/sum(tabtestbg)},
+    
+    boosting={
+      predtestbs <- predict(fitbs, newdata = dataset[test,]) 
+  tabtestbs <- predtestbs$confusion
+  accBest<- sum(diag(tabtestbs))/sum(tabtestbs)})
+out[r,7] <- best
+out[r,8] <- accBest
+}
+
+```
+
+### RESULTS AND DISCUSSION: 
+
+when table function is applied to 7th column of out variable, it gives the total number of times a classifer was chosen as best out of 100. From the output we can see that ------ was chosen --- times and --- was chosen --- times.
+
+```{r}
+table(out[,7])
+```
+
+The boxplot gives the distribution of the accuracy points of the best chosen classifier.From the plot we can infer that -------
+
+```{r}
+# summary test accuracy of the selected classifiers
+tapply(out[,8], out[,7], summary)
+# plotting
+boxplot(out$test ~ out$best)
+stripchart(out$test ~ out$best, add = TRUE, vertical = TRUE,
+method = "jitter", pch = 19, col = adjustcolor("darkorange", 0.2))
+```
+
+
+We cann calculate the mean classification accuracy on all the replications and produce a plot to visually compare the estimated accuracy of the two classifiers.We can interpret the plot as ----
+
+```{r}
+out <- out[,-7]
+out<- as.matrix.data.frame(out)
+meanAcc <- colMeans(out)
+sdAcc <-apply(out,2, sd)/sqrt(R)
+
+```
+
+```{r}
+
+# plot
+matplot(out,type ="l",lty=2,col =c("darkorange2","deepskyblue3",5,6,7,8),xlab ="Replications",ylab ="Accuracy")
+## add confidence interval
+bounds1 <-rep(c(meanAcc[1]-2*sdAcc[1], meanAcc[1]+2*sdAcc[1]),each =R )
+bounds2 <-rep(c(meanAcc[2]-2*sdAcc[2], meanAcc[2]+2*sdAcc[2]),each =R )
+bounds3 <-rep(c(meanAcc[3]-2*sdAcc[3], meanAcc[3]+2*sdAcc[3]),each =R )
+bounds4 <-rep(c(meanAcc[4]-2*sdAcc[4], meanAcc[4]+2*sdAcc[4]),each =R )
+bounds5 <-rep(c(meanAcc[5]-2*sdAcc[5], meanAcc[5]+2*sdAcc[5]),each =R )
+bounds6 <-rep(c(meanAcc[6]-2*sdAcc[6], meanAcc[6]+2*sdAcc[6]),each =R )
+polygon(c(1:R, R:1), bounds1,col =adjustcolor("darkorange2",0.2),border =FALSE)
+polygon(c(1:R, R:1), bounds2,col =adjustcolor("deepskyblue3",0.2),border =FALSE)
+polygon(c(1:R, R:1), bounds3,col =adjustcolor(5,0.2),border =FALSE)
+polygon(c(1:R, R:1), bounds4,col =adjustcolor(6,0.2),border =FALSE)
+polygon(c(1:R, R:1), bounds5,col =adjustcolor(7,0.2),border =FALSE)
+polygon(c(1:R, R:1), bounds6,col =adjustcolor(8,0.2),border =FALSE)
+## add estimated mean line
+abline(h =meanAcc,col =c("darkorange2","deepskyblue3",5,6,7,8))
+
+## add legend
+legend("bottomleft",fill =c("darkorange2","deepskyblue3",5,6,7,8),legend=c("svm","multinom","class_tree","random_forest","bagging","boosting"),bty ="n")
+
+
+```
+
+### CONCLUSION
+
+By looking at the plot of mean classification accuracy for 100 replications. Random forest has the highest accuracy followed by SVM. Whereas, classification tree and bagging have the least accuracy respectively. Bagging and Random forest are ensemble methods usually based on classification trees. Boosting is a powerful procedure that combines the outputs of many weak classifiers to produce a “strong” classifier.
