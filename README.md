@@ -1,1 +1,1 @@
-# deepsolar
+# deepsolar-analysis
